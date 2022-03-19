@@ -1,7 +1,8 @@
-﻿using UnityEngine;
+﻿using Photon.Pun;
+using UnityEngine;
 
 // 플레이어 캐릭터를 사용자 입력에 따라 움직이는 스크립트
-public class PlayerMovement : MonoBehaviour {
+public class PlayerMovement : MonoBehaviourPun {
     public float moveSpeed = 5f; // 앞뒤 움직임의 속도
     public float rotateSpeed = 180f; // 좌우 회전 속도
 
@@ -19,6 +20,12 @@ public class PlayerMovement : MonoBehaviour {
 
     // FixedUpdate는 물리 갱신 주기에 맞춰 실행됨
     private void FixedUpdate() {
+		// 로컬 플레이어만 직접 위치와 회전 변경 가능
+		if (!photonView.IsMine)
+		{
+            return;
+		}
+
         // 물리 갱신 주기마다 움직임, 회전, 애니메이션 처리 실행
         Rotate();
 		Move();
