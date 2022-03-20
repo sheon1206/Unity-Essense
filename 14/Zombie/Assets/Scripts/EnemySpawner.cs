@@ -1,8 +1,11 @@
-﻿using System.Collections.Generic;
+﻿using System.Collections;
+using System.Collections.Generic;
+using ExitGames.Client.Photon;
+using Photon.Pun;
 using UnityEngine;
 
 // 적 게임 오브젝트를 주기적으로 생성
-public class EnemySpawner : MonoBehaviour {
+public class EnemySpawner : MonoBehaviourPun, IPunObservable {
     public Enemy enemyPrefab; // 생성할 적 AI
 
     public Transform[] spawnPoints; // 적 AI를 소환할 위치들
@@ -19,20 +22,44 @@ public class EnemySpawner : MonoBehaviour {
     public Color strongEnemyColor = Color.red; // 강한 적 AI가 가지게 될 피부색
 
     private List<Enemy> enemies = new List<Enemy>(); // 생성된 적들을 담는 리스트
+    private int enemyCount = 0; // 현재 남은 적 수
     private int wave; // 현재 웨이브
 
-    private void Update() {
-        // 게임 오버 상태일때는 생성하지 않음
-        if (GameManager.instance != null && GameManager.instance.isGameover)
-        {
-            return;
-        }
+    public void OnPhotonSerializeView(PhotonStream stream, PhotonMessageInfo info)
+	{
+		if (stream.IsWriting)
+		{
+            stream.SendNext(enemies.Count);
+            stream.SendNext(wave);
+		}
+		else
+		{
+            enemyCount = (int)stream.ReceiveNext();
+            wave = (int)stream.ReceiveNext();
+		}
+	}
 
-        // 적을 모두 물리친 경우 다음 스폰 실행
-        if (enemies.Count <= 0)
-        {
-            SpawnWave();
-        }
+	private void Awake()
+	{
+        PhotonPeer.RegisterType(typeof(Color), 128, ColorSerialization.SerializeColor, ColorSerialization.DeserializeColor);
+	}
+
+	private void Update() {
+		// 호스트만 적을 직접 생성할 수 있음
+		if (PhotonNetwork.IsMasterClient)
+		{
+            // 게임 오버 상태일때는 생성하지 않음
+            if (GameManager.instance != null && GameManager.instance.isGameover)
+            {
+                return;
+            }
+
+            // 적을 모두 물리친 경우 다음 스폰 실행
+            if (enemies.Count <= 0)
+            {
+                SpawnWave();
+            }
+        }        
 
         // UI 갱신
         UpdateUI();
@@ -40,8 +67,15 @@ public class EnemySpawner : MonoBehaviour {
 
     // 웨이브 정보를 UI로 표시
     private void UpdateUI() {
-        // 현재 웨이브와 남은 적의 수 표시
-        UIManager.instance.UpdateWaveText(wave, enemies.Count);
+		// 호스트는 직접 갱신한 적 리스트를 표시, 클라이언트는 호스트가 보내준 값으로 갱신
+		if (PhotonNetwork.IsMasterClient)
+		{
+            UIManager.instance.UpdateWaveText(wave, enemies.Count);
+		}
+		else
+		{
+            UIManager.instance.UpdateWaveText(wave, enemyCount);
+        }                
     }
 
     // 현재 웨이브에 맞춰 적을 생성
@@ -75,12 +109,16 @@ public class EnemySpawner : MonoBehaviour {
 
         // 생성할 위치를 랜덤으로 결정
         Transform spawnPoint = spawnPoints[Random.Range(0, spawnPoints.Length)];
-        // 적 프리팹으로부터 적 생성
-        Enemy enemy = Instantiate(enemyPrefab, spawnPoint.position, spawnPoint.rotation);
 
-        // 생성한 적의 능력치와 추적 대상 설정
-        enemy.Setup(health, damage, speed, skinColor);
+        // 적 프리팹으로부터 적 생성. 네트워크상의 모든 클라이언트에 생성됨
+        GameObject createdEnemy = PhotonNetwork.Instantiate(enemyPrefab.gameObject.name, spawnPoint.position, spawnPoint.rotation);
 
+        // 생성한 적을 셋업하기 위해 enemy 컴포넌트를 가져옴
+        Enemy enemy = createdEnemy.GetComponent<Enemy>();
+
+        // 새성한 적의 능력치와 추적 대상 설정
+        enemy.photonView.RPC("Setup", RpcTarget.All, health, damage, speed, skinColor);
+        
         // 생성된 적을 리스트에 추가
         enemies.Add(enemy);
 
@@ -88,8 +126,20 @@ public class EnemySpawner : MonoBehaviour {
         // 사망한 적을 리스트에서 제거
         enemy.onDeath += () => enemies.Remove(enemy);
         // 사망한 적을 10초 뒤에 파괴
-        enemy.onDeath += () => Destroy(enemy.gameObject, 10f);
+        enemy.onDeath += () => StartCoroutine(DestroyAfter(enemy.gameObject, 10f));
         // 적 사망 시 점수 상승
         enemy.onDeath += () => GameManager.instance.AddScore(100);
+    }
+
+    IEnumerator DestroyAfter(GameObject target, float delay)
+    {
+        // delay 만큼 대기
+        yield return new WaitForSeconds(delay);
+
+        // target이 파괴되지 않았으면 파괴 실행
+        if (target != null)
+        {
+            PhotonNetwork.Destroy(target);
+        }
     }
 }
